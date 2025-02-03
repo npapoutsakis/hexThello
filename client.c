@@ -6,6 +6,17 @@
 #include <stdlib.h>
 #include <time.h>
 #include <ctype.h>
+#include <limits.h>
+
+// maximum depth for minimax (don't crash it!)
+#define MAX_DEPTH 5
+
+// ab-pruning flag
+#define AB_PRUNING FALSE
+
+#define max(a, b) ((a > b) ? a : b)
+#define min(a, b) ((a < b) ? a : b)
+
 
 /**********************************************************/
 Position gamePosition;		// Position we are going to use
@@ -17,12 +28,141 @@ char myColor;				// to store our color
 int mySocket;				// our socket
 char msg;					// used to store the received message
 
-char * agentName = "MyAgent!";		//default name.. change it! keep in mind MAX_NAME_LENGTH
+char * agentName = "Papou!";		//default name.. change it! keep in mind MAX_NAME_LENGTH
 
 char * ip = "127.0.0.1";	// default ip (local machine)
 /**********************************************************/
 
 
+/* Minimax & Evaluation */
+
+// --- Evaluation function (f) ---
+int evaluatePosition(Position *currentPosition, char playerColor) {
+	// V(state) = #myDisks - #opponentDisks
+	int myAgentScore = currentPosition->score[playerColor];
+	int opponentAgentScore = currentPosition->score[getOtherSide(playerColor)];
+	int stateValue = myAgentScore - opponentAgentScore;
+
+	return stateValue;
+}
+
+int getAvailableMoves(Position *pos, char color, Move moves[]) {
+    int count = 0;
+    for (int i = 0; i < ARRAY_BOARD_SIZE; i++) {
+        for (int j = 0; j < ARRAY_BOARD_SIZE; j++) {
+            if (pos->board[i][j] == EMPTY) {  // Look for empty spaces
+                Move move = {{i, j}, color};
+                if (isLegal(pos, i, j, color)) {  // Check if the move is legal
+                    moves[count++] = move;
+                }
+            }
+        }
+    }
+    return count;  // Return number of valid moves found
+}
+
+// copy the board state and apply the move
+void makeMove(Position *src, Position *dst, Move *move) {
+    *dst = *src;
+    doMove(dst, move);
+}
+
+
+// --- Minimax Algorithm ---
+int minimax(Position *currentPosition, int depth, int alpha, int beta, int maximizingPlayer) {
+
+	// -> Break condition
+	// -> Reached maximum depth or no more moves possible
+	if (depth == 0 || (!canMove(currentPosition, WHITE) && !canMove(currentPosition, BLACK))) {
+        return evaluatePosition(currentPosition, myColor);
+    }
+
+	// -> Get all available moves
+    Move moves[100];
+    int numMoves = getAvailableMoves(currentPosition, maximizingPlayer ? myColor : getOtherSide(myColor), moves);
+
+    if (numMoves == 0)
+        return evaluatePosition(currentPosition, myColor);
+
+    if (maximizingPlayer) {
+        int maxEval = INT_MIN;
+        for (int i = 0; i < numMoves; i++) {
+            Position newPosition = *currentPosition;
+            makeMove(currentPosition, &newPosition, &moves[i]);
+            int eval = minimax(&newPosition, depth - 1, alpha, beta, FALSE);
+            maxEval = max(eval, maxEval);
+
+			if (AB_PRUNING) {
+				alpha = max(eval, alpha);
+				if (beta <= alpha) return maxEval;  // Prune
+			}
+        }
+
+        return maxEval;
+    }
+	else {
+        int minEval = INT_MAX;
+        for (int i = 0; i < numMoves; i++) {
+            Position newPosition = *currentPosition;
+
+
+			// should i copy with function or do ti here?
+            makeMove(currentPosition, &newPosition, &moves[i]);
+            int eval = minimax(&newPosition, depth - 1, alpha, beta, TRUE);
+            minEval = min(eval, minEval);
+
+			if (AB_PRUNING) {
+            	beta = min(eval, beta);
+            	if (beta <= alpha)
+					return minEval;
+			}
+        }
+
+        return minEval;
+    }
+}
+
+
+
+// --- Selecting the Best Move ---
+Move getBestMove(Position *pos, char color) {
+	// assume best move
+    Move bestMove;
+    int bestEval = INT_MIN;
+    int alpha = INT_MIN;
+    int beta = INT_MAX;
+
+    Move moves[100];
+
+	// get all available moves for the current player
+    int numMoves = getAvailableMoves(pos, color, moves);
+
+    for (int i = 0; i < numMoves; i++) {
+        Position newPosition = *pos;
+        makeMove(pos, &newPosition, &moves[i]);
+
+		// evaluate the move
+		int eval = minimax(&newPosition, MAX_DEPTH - 1, alpha, beta, FALSE);
+
+        // if a better move is found update the best move
+		if (eval > bestEval) {
+            bestEval = eval;
+            bestMove = moves[i];
+        }
+
+		// update alpha
+		alpha = max(eval, alpha);
+        if (beta <= alpha) {
+			break;
+		}
+    }
+
+    return bestMove;
+}
+
+/**********************************************************/
+
+// --- Main ---
 int main( int argc, char ** argv )
 {
 	int c;
@@ -54,17 +194,9 @@ int main( int argc, char ** argv )
 
 	connectToTarget( port, ip, &mySocket );
 
-/**********************************************************/
-// used in random
-	srand( time( NULL ) );
-	int i, j;
-/**********************************************************/
-
-	while( 1 )
+	while(TRUE)
 	{
-
 		msg = recvMsg( mySocket );
-
 		switch ( msg )
 		{
 			case NM_REQUEST_NAME:		//server asks for our name
@@ -94,34 +226,11 @@ int main( int argc, char ** argv )
 			case NM_REQUEST_MOVE:		//server requests our move
 				myMove.color = myColor;
 
-
-				if( !canMove( &gamePosition, myColor ) )
-				{
+				if(!canMove(&gamePosition, myColor)){
 					myMove.tile[ 0 ] = NULL_MOVE;		// we have no move ..so send null move
 				}
-				else
-				{
-
-
-/**********************************************************/
-// random player - not the most efficient implementation
-					while( 1 )
-					{
-						i = rand() % ARRAY_BOARD_SIZE;
-						j = rand() % ARRAY_BOARD_SIZE;
-
-						if( gamePosition.board[ i ][ j ] == EMPTY )
-						{
-							myMove.tile[ 0 ] = i;
-							myMove.tile[ 1 ] = j;
-							if( isLegalMove( &gamePosition, &myMove ) )
-								break;
-						}
-					}
-
-// end of random
-/**********************************************************/
-
+				else {
+					myMove = getBestMove(&gamePosition, myColor);
 				}
 
 				sendMove( &myMove, mySocket );			//send our move
@@ -133,14 +242,7 @@ int main( int argc, char ** argv )
 				close( mySocket );
 				return 0;
 		}
-
-	} 
+	}
 
 	return 0;
 }
-
-
-
-
-
-

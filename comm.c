@@ -214,7 +214,7 @@ int getName( char textToGet[ MAX_NAME_LENGTH + 1 ], int mySocket )
 
 
 	if( size > MAX_NAME_LENGTH ) size = MAX_NAME_LENGTH;
-	strncpy( textToGet, dummy, size );
+	strncpy(textToGet, dummy, size);
 
 	textToGet[ size ] = '\0';
 
@@ -275,9 +275,3 @@ void getPosition( Position * posToGet, int mySocket )
 	//turn
 	posToGet->turn = buffer[ ARRAY_BOARD_SIZE * ARRAY_BOARD_SIZE + 2 ];
 }
-
-
-
-
-
-

@@ -2,6 +2,15 @@
     "files.associations": {
         ".php_cs": "php",
         ".php_cs.dist": "php",
-        "comm.h": "c"
+        "limits": "c",
+        "comm.h": "c",
+        "board.h": "c",
+        "time.h": "c",
+        "limits.h": "c",
+        "stdio.h": "c",
+        "stdlib.h": "c",
+        "ctype.h": "c",
+        "move.h": "c",
+        "global.h": "c"
     }
 }
