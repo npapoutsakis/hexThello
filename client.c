@@ -16,6 +16,7 @@
 
 // maximum number of moves to search
 #define MAX_MOVES_SEARCH 100
+#define TOTAL_EMPTY_CELLS 169
 
 // min(), max() macros
 #define max(a, b) ((a > b) ? a : b)
@@ -69,74 +70,124 @@ int countAvailableMoves(Position *currentPosition, Move moves[], char color) {
 
 
 // --- Evaluation function (f) ---
-int evaluatePosition(Position *currentPosition, char playerColor) {
-	// V(state) = #myDisks - #opponentDisks
-	int myAgentScore = currentPosition->score[(int)playerColor];
-	int opponentAgentScore = currentPosition->score[getOtherSide(playerColor)];
-	int stateValue = myAgentScore - opponentAgentScore;
+// int evaluatePosition(Position *currentPosition, char playerColor) {
+// 	// V(state) = #myDisks - #opponentDisks
+// 	int myAgentScore = currentPosition->score[(int)playerColor];
+// 	int opponentAgentScore = currentPosition->score[getOtherSide(playerColor)];
+// 	int stateValue = myAgentScore - opponentAgentScore;
 
-	return stateValue;
-}
+// 	return stateValue;
+// }
 
-int evaluatePosition(Position *pos, char color) {
-    int score = 0;
-    int myPieces = 0, oppPieces = 0;
-    int myMoves = 0, oppMoves = 0;
-    int stabilityScore = 0;
-    char oppColor = getOtherSide(color);
 
+// --- Evaluation function (f) ---
+int evaluatePosition(Position *currentPosition, char color) {
+	// we divide the game into 3 phases:
+	// Start: 0-30% of the game
+	// Middle: 30-70% of the game
+	// End: 70-100% of the game
+
+	// On each phase we adapt the weights of the evaluation function
+	// We assume that sometimes our agent has to defend or to attack (by playing more aggressive or defensive)
+
+	// F-score of state
+	int stateValue = 0;
+
+	// Enemy color
+	char enemyColor = getOtherSide(color);
+
+	// get the number of available moves for each player
     Move moves[100];
-    myMoves = countAvailableMoves(pos, moves, color);
-    oppMoves = countAvailableMoves(pos, moves, oppColor);
+    int my_moves = countAvailableMoves(currentPosition, moves, color);
+    int enemy_moves = countAvailableMoves(currentPosition, moves, enemyColor);
 
-    // Detect game phase (early, mid, late game)
-    int totalDiscs = pos->score[WHITE] + pos->score[BLACK];
-    double gameProgress = (double)totalDiscs / (ARRAY_BOARD_SIZE * ARRAY_BOARD_SIZE);
 
-    // 1️⃣ Piece Difference (Weighted More in Late Game)
-    myPieces = pos->score[color];
-    oppPieces = pos->score[oppColor];
-    int pieceWeight = (gameProgress < 0.5) ? 1 : 3;
-    score += pieceWeight * (myPieces - oppPieces);
+	// Game Progress
+    int total_discs = currentPosition->score[WHITE] + currentPosition->score[BLACK];
+    double gameProgress = (double)total_discs/TOTAL_EMPTY_CELLS;
 
-    // 2️⃣ Mobility (More Important in Early Game)
-    int mobilityWeight = (gameProgress < 0.5) ? 8 : 3;
-    score += mobilityWeight * (myMoves - oppMoves);
+    // Disc difference #myDisks - #opponentDisks
+    int my_score = currentPosition->score[(int)color];
+    int enemy_score = currentPosition->score[(int)enemyColor];
 
-    // 3️⃣ Corner Control (Very Strong Positions)
+
+    int weight_factor = (gameProgress < 0.5) ? 1 : 3;
+    stateValue += weight_factor * (my_score - enemy_score);
+
+    // Mobility (More Important for White)
+	// to counter enemy
+    int mobilityWeight = (color == WHITE) ? 10 : 5;
+    stateValue += mobilityWeight * (my_moves - enemy_moves);
+
+    // corners
     int cornerWeight = 25;
-    if (pos->board[0][0] == color) score += cornerWeight;
-    if (pos->board[0][ARRAY_BOARD_SIZE-1] == color) score += cornerWeight;
-    if (pos->board[ARRAY_BOARD_SIZE-1][0] == color) score += cornerWeight;
-    if (pos->board[ARRAY_BOARD_SIZE-1][ARRAY_BOARD_SIZE-1] == color) score += cornerWeight;
 
-    // 4️⃣ Stability (Pieces That Cannot Be Flipped)
-    for (int i = 0; i < ARRAY_BOARD_SIZE; i++) {
-        for (int j = 0; j < ARRAY_BOARD_SIZE; j++) {
-            if (pos->board[i][j] == color) {
-                if (i == 0 || j == 0 || i == ARRAY_BOARD_SIZE-1 || j == ARRAY_BOARD_SIZE-1) {
-                    stabilityScore += 2;
-                }
-            }
-        }
-    }
-    score += stabilityScore * 5;  // Stability is crucial in mid-late game
+	// On a 15x15 hexagonal board, there are 6 corners
+	// {0, 7} {0, 14} {7, 0} {7, 14} {14, 0} {14, 7}
+	int corners[6][2] = {{0, 7}, {0, 14}, {7, 0}, {7, 14}, {14, 0}, {14, 7}};
 
-    // 5️⃣ Parity (Odd-Even Strategy for Endgame)
-    int parityWeight = 10;
-    if (gameProgress > 0.85) {
-        int emptyTiles = (ARRAY_BOARD_SIZE * ARRAY_BOARD_SIZE) - totalDiscs;
-        if (emptyTiles % 2 == 0) {
-            score += parityWeight;  // Prefer positions with even empty tiles
-        } else {
-            score -= parityWeight;  // Avoid leaving odd empty tiles
-        }
-    }
+	for (int i = 0; i < 6; i++) {
+		if (currentPosition->board[corners[i][0]][corners[i][1]] == color) {
+			stateValue += cornerWeight;
+		}
+		if (currentPosition->board[corners[i][0]][corners[i][1]] == enemyColor) {
+			stateValue -= cornerWeight;
+		}
+	}
 
-    return score;
+	// corners control because they are the most important, not changeable, stable
+    int stabilityScore = 0;
+	int offset = (ARRAY_BOARD_SIZE - 1) / 2;
+
+	for (int i = 0; i < ARRAY_BOARD_SIZE; i++) {
+		for (int j = 0; j < ARRAY_BOARD_SIZE; j++) {
+			if (currentPosition->board[i][j] == color) {
+				// ignore out of bound spaces
+				if (currentPosition->board[i][j] == OUT_OF_BOUND){
+					continue;
+				}
+
+				// Top-edge
+				if (i == 0 && (j >= offset && j <= ARRAY_BOARD_SIZE - offset - 1)) {
+					stabilityScore += 2;
+				}
+
+				// Bottom-edge
+				if (i == ARRAY_BOARD_SIZE - 1 && (j >= offset && j <= ARRAY_BOARD_SIZE - offset - 1)) {
+					stabilityScore += 2;
+				}
+
+				// Left-edge
+				if (j == offset - i || j == offset - (ARRAY_BOARD_SIZE - 1 - i)) {
+					stabilityScore += 2;
+				}
+
+				// Right-edge
+				if (j == offset + i || j == offset + (ARRAY_BOARD_SIZE - 1 - i)) {
+					stabilityScore += 2;
+				}
+
+				// Near-edge stability (adjacent to a stable edge piece)
+				if ((i > 0 && i < ARRAY_BOARD_SIZE - 1) && (j > 0 && j < ARRAY_BOARD_SIZE - 1)) {
+					// check if the piece is stable
+					// observe the geitonika boxes
+					if (currentPosition->board[i-1][j] == color && currentPosition->board[i+1][j] == color && currentPosition->board[i][j-1] == color && currentPosition->board[i][j+1] == color) {
+						stabilityScore += 1;
+					}
+				}
+			}
+		}
+	}
+
+
+	// black should capture corners, be more stable than white.
+    int stabilityWeight = (color == BLACK) ? 8 : 3;
+    stateValue += stabilityScore * stabilityWeight;
+
+	// me trying to outperform the enemy on the tournament
+	// STRATEGY: Make opponent apply their worst move by increasing the stability of the board
+    return stateValue;
 }
-
-
 
 
 // --- Minimax Algorithm ---
@@ -242,7 +293,7 @@ Move getBestMove(Position *currentPosition, char color) {
 		doMove(&temporaryPosition, &moves[i]);
 
 		// start minimax using the temporary position (the move is already applied) and see if it's a good move
-		int current_move_evaluation = minimax(&temporaryPosition, MAX_DEPTH - 1, alpha, beta, TRUE);
+		int current_move_evaluation = minimax(&temporaryPosition, MAX_DEPTH - 1, alpha, beta, FALSE);
 
         // if a better move is found update the best move
 		if (current_move_evaluation > best_move_scored) {
