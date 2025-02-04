@@ -214,9 +214,8 @@ int getName( char textToGet[ MAX_NAME_LENGTH + 1 ], int mySocket )
 
 
 	if( size > MAX_NAME_LENGTH ) size = MAX_NAME_LENGTH;
-	strncpy(textToGet, dummy, size);
-
-	textToGet[ size ] = '\0';
+	strlcpy(textToGet, dummy, size);
+	textToGet[size] = '\0';
 
 	return 0;
 

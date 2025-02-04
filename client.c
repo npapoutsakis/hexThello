@@ -12,8 +12,12 @@
 #define MAX_DEPTH 5
 
 // ab-pruning flag
-#define AB_PRUNING FALSE
+#define AB_PRUNING TRUE
 
+// maximum number of moves to search
+#define MAX_MOVES_SEARCH 100
+
+// min(), max() macros
 #define max(a, b) ((a > b) ? a : b)
 #define min(a, b) ((a < b) ? a : b)
 
@@ -28,7 +32,7 @@ char myColor;				// to store our color
 int mySocket;				// our socket
 char msg;					// used to store the received message
 
-char * agentName = "Papou!";		//default name.. change it! keep in mind MAX_NAME_LENGTH
+char * agentName = "Pápou";		//default name.. change it! keep in mind MAX_NAME_LENGTH
 
 char * ip = "127.0.0.1";	// default ip (local machine)
 /**********************************************************/
@@ -36,36 +40,103 @@ char * ip = "127.0.0.1";	// default ip (local machine)
 
 /* Minimax & Evaluation */
 
+// --- Count the Legal moves available ---
+int countAvailableMoves(Position *currentPosition, Move moves[], char color) {
+    int total_moves = 0;
+
+	// for each square on the board, search if its empty and legal then -> added to moves list
+	for (int i = 0; i < ARRAY_BOARD_SIZE; i++) {
+        for (int j = 0; j < ARRAY_BOARD_SIZE; j++) {
+
+			// if square is empty and legal add the move to the list
+			if (currentPosition->board[i][j] == EMPTY) {
+				// parse the move
+				Move move = {{i, j}, color};
+
+				if(isLegal(currentPosition, i, j, color)) {
+                    // store the move
+					moves[total_moves] = move;
+
+					// increase moves counter
+					total_moves++;
+                }
+            }
+        }
+    }
+	// return the total number of moves available on each game state
+    return total_moves;
+}
+
+
 // --- Evaluation function (f) ---
 int evaluatePosition(Position *currentPosition, char playerColor) {
 	// V(state) = #myDisks - #opponentDisks
-	int myAgentScore = currentPosition->score[playerColor];
+	int myAgentScore = currentPosition->score[(int)playerColor];
 	int opponentAgentScore = currentPosition->score[getOtherSide(playerColor)];
 	int stateValue = myAgentScore - opponentAgentScore;
 
 	return stateValue;
 }
 
-int getAvailableMoves(Position *pos, char color, Move moves[]) {
-    int count = 0;
+int evaluatePosition(Position *pos, char color) {
+    int score = 0;
+    int myPieces = 0, oppPieces = 0;
+    int myMoves = 0, oppMoves = 0;
+    int stabilityScore = 0;
+    char oppColor = getOtherSide(color);
+
+    Move moves[100];
+    myMoves = countAvailableMoves(pos, moves, color);
+    oppMoves = countAvailableMoves(pos, moves, oppColor);
+
+    // Detect game phase (early, mid, late game)
+    int totalDiscs = pos->score[WHITE] + pos->score[BLACK];
+    double gameProgress = (double)totalDiscs / (ARRAY_BOARD_SIZE * ARRAY_BOARD_SIZE);
+
+    // 1️⃣ Piece Difference (Weighted More in Late Game)
+    myPieces = pos->score[color];
+    oppPieces = pos->score[oppColor];
+    int pieceWeight = (gameProgress < 0.5) ? 1 : 3;
+    score += pieceWeight * (myPieces - oppPieces);
+
+    // 2️⃣ Mobility (More Important in Early Game)
+    int mobilityWeight = (gameProgress < 0.5) ? 8 : 3;
+    score += mobilityWeight * (myMoves - oppMoves);
+
+    // 3️⃣ Corner Control (Very Strong Positions)
+    int cornerWeight = 25;
+    if (pos->board[0][0] == color) score += cornerWeight;
+    if (pos->board[0][ARRAY_BOARD_SIZE-1] == color) score += cornerWeight;
+    if (pos->board[ARRAY_BOARD_SIZE-1][0] == color) score += cornerWeight;
+    if (pos->board[ARRAY_BOARD_SIZE-1][ARRAY_BOARD_SIZE-1] == color) score += cornerWeight;
+
+    // 4️⃣ Stability (Pieces That Cannot Be Flipped)
     for (int i = 0; i < ARRAY_BOARD_SIZE; i++) {
         for (int j = 0; j < ARRAY_BOARD_SIZE; j++) {
-            if (pos->board[i][j] == EMPTY) {  // Look for empty spaces
-                Move move = {{i, j}, color};
-                if (isLegal(pos, i, j, color)) {  // Check if the move is legal
-                    moves[count++] = move;
+            if (pos->board[i][j] == color) {
+                if (i == 0 || j == 0 || i == ARRAY_BOARD_SIZE-1 || j == ARRAY_BOARD_SIZE-1) {
+                    stabilityScore += 2;
                 }
             }
         }
     }
-    return count;  // Return number of valid moves found
+    score += stabilityScore * 5;  // Stability is crucial in mid-late game
+
+    // 5️⃣ Parity (Odd-Even Strategy for Endgame)
+    int parityWeight = 10;
+    if (gameProgress > 0.85) {
+        int emptyTiles = (ARRAY_BOARD_SIZE * ARRAY_BOARD_SIZE) - totalDiscs;
+        if (emptyTiles % 2 == 0) {
+            score += parityWeight;  // Prefer positions with even empty tiles
+        } else {
+            score -= parityWeight;  // Avoid leaving odd empty tiles
+        }
+    }
+
+    return score;
 }
 
-// copy the board state and apply the move
-void makeMove(Position *src, Position *dst, Move *move) {
-    *dst = *src;
-    doMove(dst, move);
-}
+
 
 
 // --- Minimax Algorithm ---
@@ -73,87 +144,119 @@ int minimax(Position *currentPosition, int depth, int alpha, int beta, int maxim
 
 	// -> Break condition
 	// -> Reached maximum depth or no more moves possible
-	if (depth == 0 || (!canMove(currentPosition, WHITE) && !canMove(currentPosition, BLACK))) {
+	if (depth == 0 || (!canMove(currentPosition, WHITE) && !canMove(currentPosition, BLACK)))
         return evaluatePosition(currentPosition, myColor);
-    }
+
 
 	// -> Get all available moves
-    Move moves[100];
-    int numMoves = getAvailableMoves(currentPosition, maximizingPlayer ? myColor : getOtherSide(myColor), moves);
+    Move moves[MAX_MOVES_SEARCH];
+    int total_available_moves = countAvailableMoves(currentPosition, moves, maximizingPlayer ? myColor : getOtherSide(myColor));
 
-    if (numMoves == 0)
+	// If not moves are available then, evaluate current position and return
+    if (total_available_moves == 0)
         return evaluatePosition(currentPosition, myColor);
 
     if (maximizingPlayer) {
-        int maxEval = INT_MIN;
-        for (int i = 0; i < numMoves; i++) {
-            Position newPosition = *currentPosition;
-            makeMove(currentPosition, &newPosition, &moves[i]);
-            int eval = minimax(&newPosition, depth - 1, alpha, beta, FALSE);
-            maxEval = max(eval, maxEval);
+		// -> Maximize the score, starting from -infinity(or the lowest possible value)
+        int max_f_score = INT_MIN;
+
+		for (int i = 0; i < total_available_moves; i++) {
+  			// copy the current position
+			Position temporaryPosition = *currentPosition;
+
+			// make the move on the temporary position
+			doMove(&temporaryPosition, &moves[i]);
+
+			// starting minimax on that move, with the other player turn
+			int current_move_evaluation = minimax(&temporaryPosition, depth - 1, alpha, beta, FALSE);
+
+            max_f_score = max(current_move_evaluation, max_f_score);
 
 			if (AB_PRUNING) {
-				alpha = max(eval, alpha);
-				if (beta <= alpha) return maxEval;  // Prune
+				alpha = max(current_move_evaluation, alpha);
+
+				// pruning, saving time
+				if (beta <= alpha)
+					return max_f_score;
 			}
         }
 
-        return maxEval;
+        return max_f_score;
     }
 	else {
-        int minEval = INT_MAX;
-        for (int i = 0; i < numMoves; i++) {
-            Position newPosition = *currentPosition;
+		// -> Minimize the score, starting from +infinity(or the highest possible value)
+        int min_f_score = INT_MAX;
 
+		for (int i = 0; i < total_available_moves; i++) {
+  			// copy the current position
+			Position temporaryPosition = *currentPosition;
 
-			// should i copy with function or do ti here?
-            makeMove(currentPosition, &newPosition, &moves[i]);
-            int eval = minimax(&newPosition, depth - 1, alpha, beta, TRUE);
-            minEval = min(eval, minEval);
+			// make the move on the temporary position
+			doMove(&temporaryPosition, &moves[i]);
+
+			// starting minimax on that move, with the other player turn
+            int current_move_evaluation = minimax(&temporaryPosition, depth - 1, alpha, beta, TRUE);
+
+			min_f_score = min(current_move_evaluation, min_f_score);
 
 			if (AB_PRUNING) {
-            	beta = min(eval, beta);
-            	if (beta <= alpha)
-					return minEval;
+            	beta = min(current_move_evaluation, beta);
+
+				// pruning, saving time
+				if (beta <= alpha)
+					return min_f_score;
 			}
         }
 
-        return minEval;
+        return min_f_score;
     }
 }
 
 
 
-// --- Selecting the Best Move ---
-Move getBestMove(Position *pos, char color) {
-	// assume best move
-    Move bestMove;
-    int bestEval = INT_MIN;
+// --- Select Best Move ---
+Move getBestMove(Position *currentPosition, char color) {
+
+	// minimax parameters
+    int best_move_scored = INT_MIN;
     int alpha = INT_MIN;
     int beta = INT_MAX;
 
-    Move moves[100];
 
 	// get all available moves for the current player
-    int numMoves = getAvailableMoves(pos, color, moves);
+    Move moves[MAX_MOVES_SEARCH];
+    int total_available_moves = countAvailableMoves(currentPosition, moves, color);
 
-    for (int i = 0; i < numMoves; i++) {
-        Position newPosition = *pos;
-        makeMove(pos, &newPosition, &moves[i]);
+	// assume a perfect move
+	Move bestMove;
 
-		// evaluate the move
-		int eval = minimax(&newPosition, MAX_DEPTH - 1, alpha, beta, FALSE);
+	// if no moves are available, return a null move
+	if (total_available_moves == 0) {
+		bestMove.tile[0] = NULL_MOVE;
+		return bestMove;
+	}
+
+    for (int i = 0; i < total_available_moves; i++) {
+        // copy the current position
+		Position temporaryPosition = *currentPosition;
+		doMove(&temporaryPosition, &moves[i]);
+
+		// start minimax using the temporary position (the move is already applied) and see if it's a good move
+		int current_move_evaluation = minimax(&temporaryPosition, MAX_DEPTH - 1, alpha, beta, TRUE);
 
         // if a better move is found update the best move
-		if (eval > bestEval) {
-            bestEval = eval;
+		if (current_move_evaluation > best_move_scored) {
+            best_move_scored = current_move_evaluation;
             bestMove = moves[i];
         }
 
-		// update alpha
-		alpha = max(eval, alpha);
-        if (beta <= alpha) {
-			break;
+		if (AB_PRUNING) {
+			// update alpha
+			alpha = max(current_move_evaluation, alpha);
+
+			// else prune occurs
+			if (beta <= alpha)
+				break;
 		}
     }
 
@@ -229,9 +332,8 @@ int main( int argc, char ** argv )
 				if(!canMove(&gamePosition, myColor)){
 					myMove.tile[ 0 ] = NULL_MOVE;		// we have no move ..so send null move
 				}
-				else {
+				else
 					myMove = getBestMove(&gamePosition, myColor);
-				}
 
 				sendMove( &myMove, mySocket );			//send our move
 				doMove( &gamePosition, &myMove );		//play our move on our position
